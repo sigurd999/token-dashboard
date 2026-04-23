@@ -68,7 +68,7 @@ def _serve_static(handler, rel: str) -> None:
     handler.wfile.write(body)
 
 
-def build_handler(db_path: str, projects_dir: str):
+def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = None):
     pricing = load_pricing(PRICING_JSON)
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -143,7 +143,28 @@ def build_handler(db_path: str, projects_dir: str):
                 return _send_json(self, {"plan": get_plan(db_path), "pricing": pricing})
             if path == "/api/scan":
                 n = scan_dir(projects_dir, db_path)
+                if vps_config and vps_config["local_dir"].is_dir():
+                    nv = scan_dir(vps_config["local_dir"], db_path, source="vps")
+                    n = {k: n[k] + nv[k] for k in n}
                 return _send_json(self, n)
+            if path == "/api/vps-sync":
+                if not vps_config:
+                    return _send_error(self, 400, "VPS not configured (start with --vps-host)")
+                try:
+                    from .vps_sync import sync_projects
+                    sync_projects(
+                        vps_config["host"],
+                        vps_config["local_dir"],
+                        port=vps_config["port"],
+                        key=vps_config["key"],
+                        user=vps_config["user"],
+                        remote_path=vps_config["remote_path"],
+                    )
+                    n = scan_dir(vps_config["local_dir"], db_path, source="vps")
+                    EVENTS.put({"type": "vps-sync", "n": n, "ts": time.time()})
+                    return _send_json(self, {"ok": True, **n})
+                except Exception as e:
+                    return _send_error(self, 500, str(e))
             if path == "/api/stream":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -190,10 +211,14 @@ def build_handler(db_path: str, projects_dir: str):
     return H
 
 
-def _scan_loop(db_path: str, projects_dir: str, interval: float = 30.0):
+def _scan_loop(db_path: str, projects_dir: str, vps_local_dir=None, interval: float = 30.0):
+    from pathlib import Path
     while True:
         try:
             n = scan_dir(projects_dir, db_path)
+            if vps_local_dir and Path(vps_local_dir).is_dir():
+                nv = scan_dir(vps_local_dir, db_path, source="vps")
+                n = {k: n[k] + nv[k] for k in n}
             if n["messages"] > 0:
                 EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
         except Exception as e:
@@ -201,8 +226,9 @@ def _scan_loop(db_path: str, projects_dir: str, interval: float = 30.0):
         time.sleep(interval)
 
 
-def run(host: str, port: int, db_path: str, projects_dir: str):
-    threading.Thread(target=_scan_loop, args=(db_path, projects_dir), daemon=True).start()
-    H = build_handler(db_path, projects_dir)
+def run(host: str, port: int, db_path: str, projects_dir: str, vps_config: dict | None = None):
+    vps_local = vps_config["local_dir"] if vps_config else None
+    threading.Thread(target=_scan_loop, args=(db_path, projects_dir, vps_local), daemon=True).start()
+    H = build_handler(db_path, projects_dir, vps_config)
     httpd = http.server.ThreadingHTTPServer((host, port), H)
     httpd.serve_forever()

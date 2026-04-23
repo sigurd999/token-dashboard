@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS messages (
   cache_create_1h_tokens  INTEGER NOT NULL DEFAULT 0,
   prompt_text             TEXT,
   prompt_chars            INTEGER,
-  tool_calls_json         TEXT
+  tool_calls_json         TEXT,
+  source                  TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_project   ON messages(project_slug);
@@ -84,6 +85,7 @@ def init_db(path: Union[str, Path]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as c:
         _migrate_add_message_id(c)
+        _migrate_add_source(c)
         c.executescript(SCHEMA)
 
 
@@ -107,6 +109,20 @@ def _migrate_add_message_id(conn) -> None:
     conn.execute("DELETE FROM messages")
     conn.execute("DELETE FROM tool_calls")
     conn.execute("DELETE FROM files")
+    conn.commit()
+
+
+def _migrate_add_source(conn) -> None:
+    """Add messages.source to tag local vs vps data."""
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "source" in cols:
+        return
+    conn.execute("ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
     conn.commit()
 
 

@@ -14,12 +14,12 @@ INSERT OR REPLACE INTO messages (
   uuid, parent_uuid, session_id, project_slug, cwd, git_branch, cc_version, entrypoint,
   type, is_sidechain, agent_id, timestamp, model, stop_reason, prompt_id, message_id,
   input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-  prompt_text, prompt_chars, tool_calls_json
+  prompt_text, prompt_chars, tool_calls_json, source
 ) VALUES (
   :uuid, :parent_uuid, :session_id, :project_slug, :cwd, :git_branch, :cc_version, :entrypoint,
   :type, :is_sidechain, :agent_id, :timestamp, :model, :stop_reason, :prompt_id, :message_id,
   :input_tokens, :output_tokens, :cache_read_tokens, :cache_create_5m_tokens, :cache_create_1h_tokens,
-  :prompt_text, :prompt_chars, :tool_calls_json
+  :prompt_text, :prompt_chars, :tool_calls_json, :source
 )
 """
 
@@ -184,7 +184,7 @@ def _evict_prior_snapshots(conn, session_id: str, message_id: str, keep_uuid: st
     conn.execute(f"DELETE FROM messages WHERE uuid IN ({placeholders})", old)
 
 
-def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0) -> dict:
+def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0, source: str = "local") -> dict:
     """Ingest new lines from a JSONL file starting at ``start_byte``.
 
     Returns message/tool counts plus ``end_offset`` — the byte offset just
@@ -224,6 +224,7 @@ def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0) -> dict:
                 end_offset = line_end
                 continue
             msg, tlist = parse_record(rec, project_slug)
+            msg["source"] = source
             if not msg["session_id"] or not msg["timestamp"]:
                 end_offset = line_end
                 continue
@@ -242,7 +243,7 @@ def scan_file(path: Path, project_slug: str, conn, start_byte: int = 0) -> dict:
     return {"messages": msgs, "tools": tools, "end_offset": end_offset}
 
 
-def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict:
+def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path], source: str = "local") -> dict:
     root = Path(projects_root)
     totals = {"messages": 0, "tools": 0, "files": 0}
     if not root.is_dir():
@@ -262,7 +263,7 @@ def scan_dir(projects_root: Union[str, Path], db_path: Union[str, Path]) -> dict
             if row and stat.st_size > row["bytes_read"]:
                 offset = row["bytes_read"]
             slug = _project_slug(p, root)
-            sub = scan_file(p, slug, conn, start_byte=offset)
+            sub = scan_file(p, slug, conn, start_byte=offset, source=source)
             # Persist the byte offset of the last fully-parsed line (not
             # st_size) so a partial line mid-flush is retried on the next
             # scan instead of being skipped over.
