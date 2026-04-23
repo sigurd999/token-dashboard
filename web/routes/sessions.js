@@ -27,6 +27,21 @@ async function renderList(root) {
     </div>`;
 }
 
+const PREVIEW_LEN = 110;
+
+function promptCellHtml(t, idx) {
+  const tools = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : [];
+  if (!t.prompt_text) {
+    return fmt.htmlSafe(tools.map(x => x.name).join(' · '));
+  }
+  if (t.prompt_text.length <= PREVIEW_LEN) {
+    return `<span data-prompt="${idx}"></span>`;
+  }
+  return `<span class="prompt-short" data-prompt="${idx}"></span
+         ><button class="expand-btn" data-prompt="${idx}">more</button
+         ><div class="prompt-full" data-prompt="${idx}" hidden></div>`;
+}
+
 async function renderSession(root, id) {
   const turns = await api('/api/sessions/' + encodeURIComponent(id));
   let totalIn = 0, totalOut = 0, totalCacheRd = 0;
@@ -66,22 +81,40 @@ async function renderSession(root, id) {
       <table>
         <thead><tr><th>time</th><th>type</th><th>model</th><th class="blur-sensitive">prompt / tools</th><th class="num">in</th><th class="num">out</th><th class="num">cache rd</th></tr></thead>
         <tbody>
-          ${turns.map(t => {
-            const tools = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : [];
-            const summary = t.prompt_text ? fmt.short(t.prompt_text, 110)
-              : tools.length ? tools.map(x => x.name).join(' · ')
-              : '';
-            return `<tr>
-              <td class="mono">${(t.timestamp || '').slice(11,19)}</td>
-              <td>${t.type}${t.is_sidechain ? ' <span class="badge">side</span>' : ''}</td>
-              <td>${t.model ? `<span class="badge ${fmt.modelClass(t.model)}">${fmt.htmlSafe(fmt.modelShort(t.model))}</span>` : ''}</td>
-              <td class="blur-sensitive">${fmt.htmlSafe(summary)}</td>
-              <td class="num">${fmt.int(t.input_tokens)}</td>
-              <td class="num">${fmt.int(t.output_tokens)}</td>
-              <td class="num">${fmt.int(t.cache_read_tokens)}</td>
-            </tr>`;
-          }).join('')}
+          ${turns.map((t, idx) => `<tr>
+            <td class="mono">${(t.timestamp || '').slice(11,19)}</td>
+            <td>${t.type}${t.is_sidechain ? ' <span class="badge">side</span>' : ''}</td>
+            <td>${t.model ? `<span class="badge ${fmt.modelClass(t.model)}">${fmt.htmlSafe(fmt.modelShort(t.model))}</span>` : ''}</td>
+            <td class="blur-sensitive">${promptCellHtml(t, idx)}</td>
+            <td class="num">${fmt.int(t.input_tokens)}</td>
+            <td class="num">${fmt.int(t.output_tokens)}</td>
+            <td class="num">${fmt.int(t.cache_read_tokens)}</td>
+          </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
+
+  // Populate prompt text via textContent (never via innerHTML) to avoid XSS.
+  turns.forEach((t, idx) => {
+    if (!t.prompt_text) return;
+    const short = root.querySelector(`.prompt-short[data-prompt="${idx}"]`);
+    const full  = root.querySelector(`.prompt-full[data-prompt="${idx}"]`);
+    const plain = root.querySelector(`span[data-prompt="${idx}"]`);
+    if (plain)  plain.textContent = t.prompt_text;
+    if (short)  short.textContent = t.prompt_text.slice(0, PREVIEW_LEN - 1) + '…';
+    if (full)   full.textContent  = t.prompt_text;
+  });
+
+  root.addEventListener('click', e => {
+    const btn = e.target.closest('.expand-btn');
+    if (!btn) return;
+    const idx = btn.dataset.prompt;
+    const cell = btn.closest('td');
+    const short = cell.querySelector('.prompt-short');
+    const full  = cell.querySelector('.prompt-full');
+    const expanded = !full.hidden;
+    full.hidden  = expanded;
+    short.hidden = !expanded;
+    btn.textContent = expanded ? 'more' : 'less';
+  });
 }
