@@ -7,10 +7,26 @@ export default async function (root) {
 }
 
 async function renderList(root) {
-  const list = await api('/api/sessions?limit=100');
+  const hashQs = new URLSearchParams(location.hash.split('?')[1] || '');
+  const projectFilter = hashQs.get('project') || '';
+  const apiUrl = '/api/sessions?limit=100' + (projectFilter ? '&project=' + encodeURIComponent(projectFilter) : '');
+  const list = await api(apiUrl);
+
+  const projectName = projectFilter
+    ? (list.length > 0 ? (list[0].project_name || list[0].project_slug) : projectFilter)
+    : '';
+
+  const heading = projectFilter
+    ? `<h2 style="display:flex;align-items:center">
+         <span>${fmt.htmlSafe(projectName)} sessions</span>
+         <span class="spacer"></span>
+         <a href="#/sessions" class="muted">all sessions →</a>
+       </h2>`
+    : '<h2>Sessions</h2>';
+
   root.innerHTML = `
     <div class="card">
-      <h2>Sessions</h2>
+      ${heading}
       <table>
         <thead><tr><th>started</th><th>project</th><th class="num">turns</th><th class="num">tokens</th><th>session</th></tr></thead>
         <tbody>

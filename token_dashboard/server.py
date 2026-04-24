@@ -114,9 +114,10 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
             if path == "/api/tools":
                 return _send_json(self, tool_token_breakdown(db_path, since, until))
             if path == "/api/sessions":
+                project = qs.get("project", [None])[0]
                 return _send_json(self, recent_sessions(
                     db_path, limit=_clamp_limit(qs.get("limit", ["20"])[0], 20),
-                    since=since, until=until,
+                    since=since, until=until, project_slug=project,
                 ))
             if path == "/api/daily":
                 return _send_json(self, daily_token_breakdown(db_path, since, until))

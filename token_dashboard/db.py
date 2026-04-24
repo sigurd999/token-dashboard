@@ -284,15 +284,19 @@ def tool_token_breakdown(db_path, since=None, until=None) -> list:
         return [dict(r) for r in c.execute(sql, args)]
 
 
-def recent_sessions(db_path, limit: int = 20, since=None, until=None) -> list:
+def recent_sessions(db_path, limit: int = 20, since=None, until=None, project_slug=None) -> list:
     rng, args = _range_clause(since, until)
+    proj_clause = ""
+    if project_slug:
+        proj_clause = " AND project_slug = ?"
+        args = list(args) + [project_slug]
     sql = f"""
       SELECT session_id, project_slug,
              MIN(timestamp) AS started, MAX(timestamp) AS ended,
              SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
              SUM(input_tokens)+SUM(output_tokens) AS tokens
         FROM messages m
-       WHERE 1=1 {rng}
+       WHERE 1=1 {rng}{proj_clause}
        GROUP BY session_id
        ORDER BY ended DESC
        LIMIT ?
