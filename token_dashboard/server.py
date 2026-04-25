@@ -212,14 +212,32 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
     return H
 
 
-def _scan_loop(db_path: str, projects_dir: str, vps_local_dir=None, interval: float = 30.0):
+def _scan_loop(db_path: str, projects_dir: str, vps_config=None, interval: float = 30.0, vps_sync_interval: float = 300.0):
     from pathlib import Path
+    last_vps_sync = 0.0
     while True:
         try:
             n = scan_dir(projects_dir, db_path)
-            if vps_local_dir and Path(vps_local_dir).is_dir():
-                nv = scan_dir(vps_local_dir, db_path, source="vps")
-                n = {k: n[k] + nv[k] for k in n}
+            if vps_config:
+                now = time.time()
+                if now - last_vps_sync >= vps_sync_interval:
+                    try:
+                        from .vps_sync import sync_projects
+                        sync_projects(
+                            vps_config["host"],
+                            vps_config["local_dir"],
+                            port=vps_config["port"],
+                            key=vps_config["key"],
+                            user=vps_config["user"],
+                            remote_path=vps_config["remote_path"],
+                        )
+                        last_vps_sync = time.time()
+                    except Exception as e:
+                        EVENTS.put({"type": "error", "message": f"vps-sync: {e}"})
+                local_dir = Path(vps_config["local_dir"])
+                if local_dir.is_dir():
+                    nv = scan_dir(local_dir, db_path, source="vps")
+                    n = {k: n[k] + nv[k] for k in n}
             if n["messages"] > 0:
                 EVENTS.put({"type": "scan", "n": n, "ts": time.time()})
         except Exception as e:
@@ -228,8 +246,7 @@ def _scan_loop(db_path: str, projects_dir: str, vps_local_dir=None, interval: fl
 
 
 def run(host: str, port: int, db_path: str, projects_dir: str, vps_config: dict | None = None):
-    vps_local = vps_config["local_dir"] if vps_config else None
-    threading.Thread(target=_scan_loop, args=(db_path, projects_dir, vps_local), daemon=True).start()
+    threading.Thread(target=_scan_loop, args=(db_path, projects_dir, vps_config), daemon=True).start()
     H = build_handler(db_path, projects_dir, vps_config)
     httpd = http.server.ThreadingHTTPServer((host, port), H)
     httpd.serve_forever()
