@@ -14,12 +14,12 @@ INSERT OR REPLACE INTO messages (
   uuid, parent_uuid, session_id, project_slug, cwd, git_branch, cc_version, entrypoint,
   type, is_sidechain, agent_id, timestamp, model, stop_reason, prompt_id, message_id,
   input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-  prompt_text, prompt_chars, tool_calls_json, source
+  prompt_text, prompt_chars, tool_calls_json, source, response_text, thinking_text
 ) VALUES (
   :uuid, :parent_uuid, :session_id, :project_slug, :cwd, :git_branch, :cc_version, :entrypoint,
   :type, :is_sidechain, :agent_id, :timestamp, :model, :stop_reason, :prompt_id, :message_id,
   :input_tokens, :output_tokens, :cache_read_tokens, :cache_create_5m_tokens, :cache_create_1h_tokens,
-  :prompt_text, :prompt_chars, :tool_calls_json, :source
+  :prompt_text, :prompt_chars, :tool_calls_json, :source, :response_text, :thinking_text
 )
 """
 
@@ -53,6 +53,20 @@ def _usage(rec: dict) -> dict:
         "cache_create_5m_tokens": int(cc.get("ephemeral_5m_input_tokens") or 0),
         "cache_create_1h_tokens": int(cc.get("ephemeral_1h_input_tokens") or 0),
     }
+
+
+def _response_and_thinking(rec: dict) -> Tuple[Optional[str], Optional[str]]:
+    if rec.get("type") != "assistant":
+        return None, None
+    content = (rec.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return None, None
+    text_parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    think_parts = [b.get("thinking", "") for b in content if isinstance(b, dict) and b.get("type") == "thinking"]
+    return (
+        "".join(text_parts) or None,
+        "".join(think_parts) or None,
+    )
 
 
 def _prompt_text(rec: dict) -> Tuple[Optional[str], Optional[int]]:
@@ -126,6 +140,7 @@ def parse_record(rec: dict, project_slug: str) -> Tuple[dict, List[dict]]:
     """Return (message_row, [tool_call_rows])."""
     msg_obj = rec.get("message") or {}
     text, chars = _prompt_text(rec)
+    response_text, thinking_text = _response_and_thinking(rec)
     msg = {
         "uuid":         rec.get("uuid"),
         "parent_uuid":  rec.get("parentUuid"),
@@ -146,6 +161,8 @@ def parse_record(rec: dict, project_slug: str) -> Tuple[dict, List[dict]]:
         "prompt_text":  text,
         "prompt_chars": chars,
         "tool_calls_json": None,
+        "response_text":  response_text,
+        "thinking_text":  thinking_text,
         **_usage(rec),
     }
     tools = _extract_tools(rec)

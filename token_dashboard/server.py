@@ -26,6 +26,123 @@ PRICING_JSON = Path(__file__).resolve().parent.parent / "pricing.json"
 
 EVENTS: "queue.Queue[dict]" = queue.Queue()
 
+
+def _read_hooks_data(db_path: str) -> dict:
+    """Return hooks from global settings files and any project .claude/ dirs."""
+    import sqlite3
+    sources = []
+    claude_home = Path.home() / ".claude"
+
+    for fname in ("settings.json", "settings.local.json"):
+        p = claude_home / fname
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        hooks = data.get("hooks", {})
+        if hooks:
+            sources.append({"label": f"~/.claude/{fname}", "hooks": hooks})
+
+    try:
+        con = sqlite3.connect(db_path)
+        cwds = [r[0] for r in con.execute(
+            "SELECT DISTINCT cwd FROM messages WHERE cwd IS NOT NULL LIMIT 50"
+        ).fetchall()]
+        con.close()
+        seen: set[str] = set()
+        for cwd in cwds:
+            for fname in ("settings.json", "settings.local.json"):
+                p = Path(cwd) / ".claude" / fname
+                key = str(p)
+                if key in seen or not p.exists():
+                    continue
+                seen.add(key)
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                hooks = data.get("hooks", {})
+                if hooks:
+                    sources.append({"label": f"{Path(cwd).name}/.claude/{fname}", "hooks": hooks})
+    except Exception:
+        pass
+
+    return {"sources": sources}
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    meta: dict = {}
+    body = text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].strip().splitlines():
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    meta[k.strip()] = v.strip()
+            body = text[end + 4:].strip()
+    return meta, body
+
+
+def _read_memory_data() -> dict:
+    """Return global CLAUDE.md content and per-project memory entries."""
+    claude_home = Path.home() / ".claude"
+    result: dict = {"global": None, "projects": []}
+
+    global_md = claude_home / "CLAUDE.md"
+    if global_md.exists():
+        try:
+            result["global"] = global_md.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    projects_root = claude_home / "projects"
+    if not projects_root.exists():
+        return result
+
+    for project_dir in sorted(projects_root.iterdir()):
+        if not project_dir.is_dir():
+            continue
+        memory_dir = project_dir / "memory"
+        if not memory_dir.exists():
+            continue
+
+        entries = []
+        for md_file in sorted(memory_dir.glob("*.md")):
+            if md_file.name == "MEMORY.md":
+                continue
+            try:
+                text = md_file.read_text(encoding="utf-8")
+                meta, body = _parse_frontmatter(text)
+                entries.append({
+                    "file": md_file.name,
+                    "name": meta.get("name", md_file.stem),
+                    "description": meta.get("description", ""),
+                    "type": meta.get("type", ""),
+                    "body": body,
+                })
+            except Exception:
+                pass
+
+        index_text = None
+        index_md = memory_dir / "MEMORY.md"
+        if index_md.exists():
+            try:
+                index_text = index_md.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        if entries or index_text:
+            result["projects"].append({
+                "slug": project_dir.name,
+                "index": index_text,
+                "entries": entries,
+            })
+
+    return result
+
 MAX_POST_BYTES = 1_000_000  # 1 MB — we only accept tiny JSON bodies (plan, tip key)
 MAX_LIMIT = 1000
 
@@ -138,6 +255,10 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
             if path.startswith("/api/sessions/"):
                 sid = path.rsplit("/", 1)[1]
                 return _send_json(self, session_turns(db_path, sid))
+            if path == "/api/hooks":
+                return _send_json(self, _read_hooks_data(db_path))
+            if path == "/api/memory":
+                return _send_json(self, _read_memory_data())
             if path == "/api/tips":
                 return _send_json(self, all_tips(db_path))
             if path == "/api/plan":
@@ -181,7 +302,7 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
                     try:
                         self.wfile.write(chunk)
                         self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                         return
             self.send_response(404)
             self.end_headers()

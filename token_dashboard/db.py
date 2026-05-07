@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS messages (
   prompt_text             TEXT,
   prompt_chars            INTEGER,
   tool_calls_json         TEXT,
-  source                  TEXT NOT NULL DEFAULT 'local'
+  source                  TEXT NOT NULL DEFAULT 'local',
+  response_text           TEXT,
+  thinking_text           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session   ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_project   ON messages(project_slug);
@@ -86,6 +88,7 @@ def init_db(path: Union[str, Path]) -> None:
     with sqlite3.connect(path) as c:
         _migrate_add_message_id(c)
         _migrate_add_source(c)
+        _migrate_add_response_thinking(c)
         c.executescript(SCHEMA)
 
 
@@ -123,6 +126,29 @@ def _migrate_add_source(conn) -> None:
     if "source" in cols:
         return
     conn.execute("ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
+    conn.commit()
+
+
+def _migrate_add_response_thinking(conn) -> None:
+    """Add response_text and thinking_text columns; clear files to backfill via rescan.
+
+    Why: assistant text and thinking blocks were previously discarded. Clearing
+    the files table forces a full rescan so INSERT OR REPLACE backfills all
+    existing rows without losing any message data.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "response_text" in cols and "thinking_text" in cols:
+        return
+    if "response_text" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN response_text TEXT")
+    if "thinking_text" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN thinking_text TEXT")
+    conn.execute("DELETE FROM files")
     conn.commit()
 
 
@@ -322,7 +348,8 @@ def session_turns(db_path, session_id: str) -> list:
       SELECT uuid, parent_uuid, type, timestamp, model, is_sidechain, agent_id,
              input_tokens, output_tokens, cache_read_tokens,
              cache_create_5m_tokens, cache_create_1h_tokens,
-             prompt_text, prompt_chars, tool_calls_json, project_slug, cwd
+             prompt_text, prompt_chars, tool_calls_json, project_slug, cwd,
+             response_text, thinking_text
         FROM messages
        WHERE session_id = ?
        ORDER BY timestamp ASC

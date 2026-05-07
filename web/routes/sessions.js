@@ -45,17 +45,37 @@ async function renderList(root) {
 
 const PREVIEW_LEN = 110;
 
+function expandable(text, dataAttr, idx, cls = '') {
+  if (text.length <= PREVIEW_LEN) return `<span ${dataAttr}="${idx}" ${cls}></span>`;
+  return `<span class="prompt-short ${cls}" ${dataAttr}="${idx}"></span
+         ><button class="expand-btn" ${dataAttr}="${idx}">more</button
+         ><div class="prompt-full ${cls}" ${dataAttr}="${idx}" hidden></div>`;
+}
+
 function promptCellHtml(t, idx) {
   const tools = t.tool_calls_json ? JSON.parse(t.tool_calls_json) : [];
-  if (!t.prompt_text) {
-    return fmt.htmlSafe(tools.map(x => x.name).join(' · '));
+  const toolStr = fmt.htmlSafe(tools.map(x => x.name).join(' · '));
+
+  if (t.type === 'user') {
+    if (!t.prompt_text) return toolStr || '—';
+    return expandable(t.prompt_text, 'data-prompt', idx);
   }
-  if (t.prompt_text.length <= PREVIEW_LEN) {
-    return `<span data-prompt="${idx}"></span>`;
+
+  if (t.type === 'assistant') {
+    let html = '';
+    if (t.thinking_text) {
+      html += `<button class="expand-btn think-btn" data-think="${idx}">thinking</button
+              ><div class="prompt-full think-block" data-think="${idx}" hidden></div> `;
+    }
+    if (t.response_text) {
+      html += expandable(t.response_text, 'data-resp', idx, 'response-text');
+    } else if (toolStr) {
+      html += toolStr;
+    }
+    return html || '—';
   }
-  return `<span class="prompt-short" data-prompt="${idx}"></span
-         ><button class="expand-btn" data-prompt="${idx}">more</button
-         ><div class="prompt-full" data-prompt="${idx}" hidden></div>`;
+
+  return toolStr || '—';
 }
 
 async function renderSession(root, id) {
@@ -95,7 +115,7 @@ async function renderSession(root, id) {
     <div class="card" style="margin-top:16px">
       <h3>Turn-by-turn</h3>
       <table>
-        <thead><tr><th>time</th><th>type</th><th>model</th><th class="blur-sensitive">prompt / tools</th><th class="num">in</th><th class="num">out</th><th class="num">cache rd</th></tr></thead>
+        <thead><tr><th>time</th><th>type</th><th>model</th><th class="blur-sensitive">content</th><th class="num">in</th><th class="num">out</th><th class="num">cache rd</th></tr></thead>
         <tbody>
           ${turns.map((t, idx) => `<tr>
             <td class="mono">${(t.timestamp || '').slice(11,19)}</td>
@@ -110,27 +130,41 @@ async function renderSession(root, id) {
       </table>
     </div>`;
 
-  // Populate prompt text via textContent (never via innerHTML) to avoid XSS.
+  // Populate text content via textContent (never innerHTML) to avoid XSS.
   turns.forEach((t, idx) => {
-    if (!t.prompt_text) return;
-    const short = root.querySelector(`.prompt-short[data-prompt="${idx}"]`);
-    const full  = root.querySelector(`.prompt-full[data-prompt="${idx}"]`);
-    const plain = root.querySelector(`span[data-prompt="${idx}"]`);
-    if (plain)  plain.textContent = t.prompt_text;
-    if (short)  short.textContent = t.prompt_text.slice(0, PREVIEW_LEN - 1) + '…';
-    if (full)   full.textContent  = t.prompt_text;
+    const fill = (attr, text) => {
+      const short = root.querySelector(`.prompt-short[${attr}="${idx}"]`);
+      const full  = root.querySelector(`.prompt-full[${attr}="${idx}"]`);
+      const plain = root.querySelector(`span[${attr}="${idx}"]`);
+      if (plain) plain.textContent = text;
+      if (short) short.textContent = text.slice(0, PREVIEW_LEN - 1) + '…';
+      if (full)  full.textContent  = text;
+    };
+    if (t.prompt_text)   fill('data-prompt', t.prompt_text);
+    if (t.response_text) fill('data-resp',   t.response_text);
+    if (t.thinking_text) {
+      const block = root.querySelector(`.think-block[data-think="${idx}"]`);
+      if (block) block.textContent = t.thinking_text;
+    }
   });
 
   root.addEventListener('click', e => {
     const btn = e.target.closest('.expand-btn');
     if (!btn) return;
-    const idx = btn.dataset.prompt;
-    const cell = btn.closest('td');
-    const short = cell.querySelector('.prompt-short');
-    const full  = cell.querySelector('.prompt-full');
-    const expanded = !full.hidden;
-    full.hidden  = expanded;
-    short.hidden = !expanded;
-    btn.textContent = expanded ? 'more' : 'less';
+    if (btn.dataset.think !== undefined) {
+      const block = btn.closest('td').querySelector(`.think-block[data-think="${btn.dataset.think}"]`);
+      block.hidden = !block.hidden;
+      btn.textContent = block.hidden ? 'thinking' : 'less';
+      return;
+    }
+    const isResp = btn.dataset.resp !== undefined;
+    const idx    = isResp ? btn.dataset.resp : btn.dataset.prompt;
+    const attr   = isResp ? 'data-resp' : 'data-prompt';
+    const cell   = btn.closest('td');
+    const short  = cell.querySelector(`.prompt-short[${attr}="${idx}"]`);
+    const full   = cell.querySelector(`.prompt-full[${attr}="${idx}"]`);
+    full.hidden  = !full.hidden;
+    short.hidden = !short.hidden;
+    btn.textContent = full.hidden ? 'more' : 'less';
   });
 }
