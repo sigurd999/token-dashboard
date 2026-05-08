@@ -20,7 +20,12 @@ export const fmt = {
     return '';
   },
   modelShort: m => (m || '').replace('claude-', ''),
-  ts: t => (t || '').slice(0, 16).replace('T', ' '),
+  ts: t => {
+    if (!t) return '';
+    const d = new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t) ? t : t + 'Z');
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  },
 };
 
 export async function api(path, opts) {
