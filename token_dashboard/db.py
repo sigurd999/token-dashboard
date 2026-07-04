@@ -89,6 +89,7 @@ def init_db(path: Union[str, Path]) -> None:
         _migrate_add_message_id(c)
         _migrate_add_source(c)
         _migrate_add_response_thinking(c)
+        _migrate_rescan_for_agent_targets(c)
         c.executescript(SCHEMA)
 
 
@@ -149,6 +150,30 @@ def _migrate_add_response_thinking(conn) -> None:
     if "thinking_text" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN thinking_text TEXT")
     conn.execute("DELETE FROM files")
+    conn.commit()
+
+
+def _migrate_rescan_for_agent_targets(conn) -> None:
+    """One-time rescan so Task/Agent tool calls get their subagent-type target.
+
+    Why: the scanner previously only mapped the 'Task' tool name, so sessions
+    recorded by newer Claude Code versions (tool name 'Agent') have NULL
+    targets and per-agent attribution can't name the agent type. Clearing the
+    files table replays the JSONLs with the updated target extraction.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+    ).fetchone()
+    if not has_table:
+        return
+    conn.execute("CREATE TABLE IF NOT EXISTS plan (k TEXT PRIMARY KEY, v TEXT)")
+    done = conn.execute(
+        "SELECT 1 FROM plan WHERE k='migrated_agent_targets'"
+    ).fetchone()
+    if done:
+        return
+    conn.execute("DELETE FROM files")
+    conn.execute("INSERT INTO plan (k, v) VALUES ('migrated_agent_targets', '1')")
     conn.commit()
 
 
@@ -244,13 +269,14 @@ def overview_totals(db_path, since=None, until=None) -> dict:
         return dict(c.execute(sql, args).fetchone())
 
 
-def expensive_prompts(db_path, limit: int = 50, sort: str = "tokens") -> list:
+def expensive_prompts(db_path, limit: int = 50, sort: str = "tokens", since=None, until=None) -> list:
     """User prompt joined with the immediately-following assistant turn's tokens.
 
     sort="tokens" (default) → largest billable first.
     sort="recent"           → newest first.
     """
     order = "u.timestamp DESC" if sort == "recent" else "billable_tokens DESC"
+    rng, args = _range_clause(since, until, col="u.timestamp")
     sql = f"""
       SELECT u.uuid AS user_uuid, u.session_id, u.project_slug, u.timestamp,
              u.prompt_text, u.prompt_chars,
@@ -260,12 +286,12 @@ def expensive_prompts(db_path, limit: int = 50, sort: str = "tokens") -> list:
              COALESCE(a.cache_read_tokens,0) AS cache_read_tokens
         FROM messages u
         JOIN messages a ON a.parent_uuid = u.uuid AND a.type='assistant'
-       WHERE u.type='user' AND u.prompt_text IS NOT NULL
+       WHERE u.type='user' AND u.prompt_text IS NOT NULL {rng}
        ORDER BY {order}
        LIMIT ?
     """
     with connect(db_path) as c:
-        return [dict(r) for r in c.execute(sql, (limit,))]
+        return [dict(r) for r in c.execute(sql, (*args, limit))]
 
 
 def project_summary(db_path, since=None, until=None) -> list:
@@ -319,8 +345,25 @@ def recent_sessions(db_path, limit: int = 20, since=None, until=None, project_sl
     sql = f"""
       SELECT session_id, project_slug,
              MIN(timestamp) AS started, MAX(timestamp) AS ended,
-             SUM(CASE WHEN type='user' THEN 1 ELSE 0 END) AS turns,
-             SUM(input_tokens)+SUM(output_tokens) AS tokens
+             SUM(CASE WHEN type='user' AND is_sidechain=0 AND prompt_text IS NOT NULL
+                      AND prompt_text NOT LIKE '<command-%'
+                      AND prompt_text NOT LIKE '<local-command%'
+                      THEN 1 ELSE 0 END) AS turns,
+             SUM(input_tokens)+SUM(output_tokens) AS tokens,
+             COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
+             SUM(input_tokens)+SUM(output_tokens)
+               +SUM(cache_create_5m_tokens)+SUM(cache_create_1h_tokens) AS billable_tokens,
+             COUNT(DISTINCT CASE WHEN is_sidechain=1
+                   AND agent_id NOT LIKE 'acompact-%'
+                   AND agent_id NOT LIKE 'aside_question-%'
+                   THEN agent_id END) AS agents,
+             GROUP_CONCAT(DISTINCT model) AS models,
+             (SELECT substr(m2.prompt_text, 1, 200) FROM messages m2
+               WHERE m2.session_id = m.session_id AND m2.type = 'user'
+                 AND m2.is_sidechain = 0 AND m2.prompt_text IS NOT NULL
+                 AND m2.prompt_text NOT LIKE '<command-%'
+                 AND m2.prompt_text NOT LIKE '<local-command%'
+               ORDER BY m2.timestamp ASC LIMIT 1) AS first_prompt
         FROM messages m
        WHERE 1=1 {rng}{proj_clause}
        GROUP BY session_id
@@ -356,6 +399,85 @@ def session_turns(db_path, session_id: str) -> list:
     """
     with connect(db_path) as c:
         return [dict(r) for r in c.execute(sql, (session_id,))]
+
+
+def session_agents(db_path, session_id: str) -> list:
+    """Per-agent aggregates for a session's sidechain (subagent) activity.
+
+    Each Task tool call spawns a subagent whose messages are written with
+    is_sidechain=1 and a distinct agent_id. The JSONL does not link the Task
+    invocation to the agent_id, so the subagent type is paired best-effort:
+    agents ordered by start time are matched to the earliest unused Task call
+    that fired at or before that start. Unmatched agents get type None.
+    """
+    agents_sql = """
+      SELECT agent_id,
+             COUNT(*) AS messages,
+             MIN(timestamp) AS started, MAX(timestamp) AS ended,
+             COALESCE(SUM(input_tokens),0)      AS input_tokens,
+             COALESCE(SUM(output_tokens),0)     AS output_tokens,
+             COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
+             COALESCE(SUM(cache_create_5m_tokens),0)
+               + COALESCE(SUM(cache_create_1h_tokens),0) AS cache_create_tokens,
+             GROUP_CONCAT(DISTINCT model) AS models
+        FROM messages
+       WHERE session_id = ? AND is_sidechain = 1
+       GROUP BY agent_id
+       ORDER BY started ASC
+    """
+
+    tools_sql = """
+      SELECT m.agent_id AS agent_id, COUNT(*) AS tool_calls
+        FROM tool_calls tc
+        JOIN messages m ON m.uuid = tc.message_uuid
+       WHERE m.session_id = ? AND m.is_sidechain = 1
+         AND tc.tool_name != '_tool_result'
+       GROUP BY m.agent_id
+    """
+
+    tasks_sql = """
+      SELECT tc.target AS subagent_type, tc.timestamp AS ts
+        FROM tool_calls tc
+        JOIN messages m ON m.uuid = tc.message_uuid
+       WHERE tc.session_id = ? AND tc.tool_name IN ('Task', 'Agent')
+         AND tc.target IS NOT NULL AND m.is_sidechain = 0
+       ORDER BY tc.timestamp ASC
+    """
+
+    with connect(db_path) as c:
+        rows = [dict(r) for r in c.execute(agents_sql, (session_id,))]
+        tool_counts = {r["agent_id"]: r["tool_calls"] for r in c.execute(tools_sql, (session_id,))}
+        tasks = [dict(r) for r in c.execute(tasks_sql, (session_id,))]
+
+    used = [False] * len(tasks)
+    for r in rows:
+        r["tool_calls"] = tool_counts.get(r["agent_id"], 0)
+        r["kind"] = _agent_kind(r["agent_id"])
+        r["subagent_type"] = None
+        if r["kind"] != "task":
+            continue
+        for i, t in enumerate(tasks):
+            if not used[i] and t["ts"] <= r["started"]:
+                r["subagent_type"] = t["subagent_type"]
+                used[i] = True
+                break
+
+    return rows
+
+
+def _agent_kind(agent_id) -> str:
+    """Classify a sidechain by its agent_id prefix.
+
+    Claude Code encodes the sidechain's origin in the id: 'acompact-…' is a
+    context-compaction pass, 'aside_question-…' answers a user side question,
+    anything else is a Task/Agent-spawned subagent.
+    """
+    aid = agent_id or ""
+    if aid.startswith("acompact-"):
+        return "compact"
+    if aid.startswith("aside_question-"):
+        return "side_question"
+    return "task"
 
 
 def daily_token_breakdown(db_path, since=None, until=None) -> list:

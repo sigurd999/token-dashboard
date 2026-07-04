@@ -6,8 +6,8 @@ from token_dashboard.db import (
     init_db, connect,
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
-    daily_token_breakdown, model_breakdown, project_name_for,
-    skill_breakdown,
+    session_agents, daily_token_breakdown, model_breakdown,
+    project_name_for, skill_breakdown,
 )
 
 
@@ -135,6 +135,77 @@ class SkillBreakdownTests(unittest.TestCase):
         rows = skill_breakdown(self.db, since="2026-04-11T00:00:00Z")
         names = [r["skill"] for r in rows]
         self.assertEqual(names, ["create-skill"])
+
+
+class SessionAgentsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "a.db")
+        init_db(self.db)
+        with connect(self.db) as c:
+            c.executescript("""
+            INSERT INTO messages (uuid, session_id, project_slug, type, timestamp, model,
+              is_sidechain, agent_id,
+              input_tokens, output_tokens, cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
+              prompt_text)
+            VALUES
+              ('u1','s1','pA','user','2026-04-10T00:00:00Z',NULL,0,NULL,0,0,0,0,0,'do stuff'),
+              ('a1','s1','pA','assistant','2026-04-10T00:00:01Z','claude-opus-4-7',0,NULL,10,20,0,0,0,NULL),
+              ('sc1','s1','pA','user','2026-04-10T00:00:03Z',NULL,1,'agentX',0,0,0,0,0,NULL),
+              ('sc2','s1','pA','assistant','2026-04-10T00:00:04Z','claude-haiku-4-5',1,'agentX',5,50,100,0,0,NULL),
+              ('sc3','s1','pA','assistant','2026-04-10T00:02:00Z','claude-haiku-4-5',1,'agentX',5,60,200,0,0,NULL),
+              ('sc4','s1','pA','assistant','2026-04-10T00:05:00Z','claude-sonnet-4-6',1,'agentY',1,9,0,0,0,NULL),
+              ('sc5','s1','pA','assistant','2026-04-10T00:06:00Z','claude-haiku-4-5',1,'acompact-abc123',1,5,0,0,0,NULL);
+
+            INSERT INTO tool_calls (message_uuid, session_id, project_slug, tool_name, target, timestamp, is_error)
+            VALUES
+              ('a1','s1','pA','Task','Explore','2026-04-10T00:00:01Z',0),
+              ('a1','s1','pA','Task','Plan','2026-04-10T00:04:00Z',0),
+              ('sc2','s1','pA','Read','foo.py','2026-04-10T00:00:04Z',0),
+              ('sc2','s1','pA','_tool_result','use-1','2026-04-10T00:00:05Z',0),
+              ('sc3','s1','pA','Bash','ls','2026-04-10T00:02:00Z',0);
+            """)
+            c.commit()
+
+    def test_groups_by_agent(self):
+        rows = session_agents(self.db, "s1")
+        self.assertEqual(len(rows), 3)
+        by_id = {r["agent_id"]: r for r in rows}
+        self.assertEqual(by_id["agentX"]["messages"], 3)
+        self.assertEqual(by_id["agentX"]["output_tokens"], 110)
+        self.assertEqual(by_id["agentX"]["cache_read_tokens"], 300)
+        self.assertEqual(by_id["agentY"]["messages"], 1)
+
+    def test_agent_kind_classification(self):
+        rows = session_agents(self.db, "s1")
+        by_id = {r["agent_id"]: r for r in rows}
+        self.assertEqual(by_id["agentX"]["kind"], "task")
+        self.assertEqual(by_id["acompact-abc123"]["kind"], "compact")
+        self.assertIsNone(by_id["acompact-abc123"]["subagent_type"])
+
+    def test_tool_calls_exclude_results(self):
+        rows = session_agents(self.db, "s1")
+        by_id = {r["agent_id"]: r for r in rows}
+        self.assertEqual(by_id["agentX"]["tool_calls"], 2)
+        self.assertEqual(by_id["agentY"]["tool_calls"], 0)
+
+    def test_subagent_type_paired_in_start_order(self):
+        rows = session_agents(self.db, "s1")
+        by_id = {r["agent_id"]: r for r in rows}
+        self.assertEqual(by_id["agentX"]["subagent_type"], "Explore")
+        self.assertEqual(by_id["agentY"]["subagent_type"], "Plan")
+
+    def test_empty_session(self):
+        self.assertEqual(session_agents(self.db, "nope"), [])
+
+    def test_recent_sessions_reports_agents_and_first_prompt(self):
+        rows = recent_sessions(self.db, limit=5)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["agents"], 2)
+        self.assertEqual(r["first_prompt"], "do stuff")
+        self.assertEqual(r["turns"], 1)  # sidechain user rows excluded
+        self.assertIn("claude-opus-4-7", r["models"])
 
 
 class ProjectNameTests(unittest.TestCase):

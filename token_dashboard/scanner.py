@@ -29,17 +29,21 @@ VALUES (:message_uuid, :session_id, :project_slug, :tool_name, :target, :result_
 """
 
 
+# Tool → input field(s) to record as the call's target. Tuples are tried in
+# order — e.g. Task/Agent calls without an explicit subagent_type fall back to
+# the human-readable description.
 _TARGET_FIELDS = {
-    "Read":      "file_path",
-    "Edit":      "file_path",
-    "Write":     "file_path",
-    "Glob":      "pattern",
-    "Grep":      "pattern",
-    "Bash":      "command",
-    "WebFetch":  "url",
-    "WebSearch": "query",
-    "Task":      "subagent_type",
-    "Skill":     "skill",
+    "Read":      ("file_path",),
+    "Edit":      ("file_path",),
+    "Write":     ("file_path",),
+    "Glob":      ("pattern",),
+    "Grep":      ("pattern",),
+    "Bash":      ("command",),
+    "WebFetch":  ("url",),
+    "WebSearch": ("query",),
+    "Task":      ("subagent_type", "description"),
+    "Agent":     ("subagent_type", "description"),
+    "Skill":     ("skill",),
 }
 
 
@@ -83,11 +87,12 @@ def _prompt_text(rec: dict) -> Tuple[Optional[str], Optional[int]]:
 
 
 def _target(name: str, inp: dict) -> Optional[str]:
-    field = _TARGET_FIELDS.get(name)
-    if field and isinstance(inp, dict):
-        v = inp.get(field)
-        if isinstance(v, str):
-            return v[:500]
+    fields = _TARGET_FIELDS.get(name)
+    if fields and isinstance(inp, dict):
+        for field in fields:
+            v = inp.get(field)
+            if isinstance(v, str) and v:
+                return v[:500]
     return None
 
 

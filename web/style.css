@@ -200,6 +200,61 @@ body.privacy-on .blur-sensitive { filter: blur(6px); }
   max-height: 400px; overflow-y: auto;
 }
 
+/* session list */
+tr.rowlink { cursor: pointer; }
+td.prompt-preview {
+  max-width: 340px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted);
+}
+
+/* session detail: exchange flow */
+.exchange {
+  border: 1px solid var(--border); border-radius: 8px;
+  margin: 10px 0; background: var(--panel-2);
+}
+.ex-head {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px 8px;
+}
+.ex-num  { color: var(--muted-2); font-size: 11px; padding-top: 2px; min-width: 22px; }
+.ex-time { color: var(--muted);   font-size: 11px; padding-top: 2px; white-space: nowrap; }
+.ex-prompt { flex: 1; min-width: 0; font-size: 13px; }
+.ex-stats {
+  color: var(--muted); font-size: 11px;
+  white-space: nowrap; padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.ex-meter {
+  height: 3px; background: var(--bg);
+  border-radius: 2px; margin: 0 12px; overflow: hidden;
+}
+.ex-meter span {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 2px;
+}
+.ex-body {
+  padding: 8px 12px 10px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.ex-body:empty { padding: 0 12px 10px; }
+.ex-resp { padding: 0 12px 12px; font-size: 12px; color: var(--muted); }
+
+/* chips (tools + agents) */
+.chip {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-family: var(--mono);
+  background: var(--bg); color: var(--muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.chip.agent {
+  color: var(--accent-2);
+  border-color: rgba(124, 92, 255, 0.3);
+  background: rgba(124, 92, 255, 0.08);
+}
+
 /* first-run modal */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(10,14,20,0.85);

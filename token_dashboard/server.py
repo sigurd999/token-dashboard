@@ -13,7 +13,8 @@ from urllib.parse import urlparse, parse_qs
 from .db import (
     overview_totals, expensive_prompts, project_summary,
     tool_token_breakdown, recent_sessions, session_turns,
-    daily_token_breakdown, model_breakdown, skill_breakdown,
+    session_agents, daily_token_breakdown, model_breakdown,
+    skill_breakdown,
 )
 from .pricing import load_pricing, cost_for, get_plan, set_plan
 from .tips import all_tips, dismiss_tip
@@ -217,7 +218,7 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
             if path == "/api/prompts":
                 limit = _clamp_limit(qs.get("limit", ["50"])[0], 50)
                 sort = qs.get("sort", ["tokens"])[0]
-                rows = expensive_prompts(db_path, limit=limit, sort=sort)
+                rows = expensive_prompts(db_path, limit=limit, sort=sort, since=since, until=until)
                 for r in rows:
                     c = cost_for(r["model"], {
                         "input_tokens": 0, "output_tokens": 0,
@@ -253,8 +254,38 @@ def build_handler(db_path: str, projects_dir: str, vps_config: dict | None = Non
                     r["cost_estimated"] = c["estimated"]
                 return _send_json(self, rows)
             if path.startswith("/api/sessions/"):
-                sid = path.rsplit("/", 1)[1]
-                return _send_json(self, session_turns(db_path, sid))
+                sid = path[len("/api/sessions/"):].strip("/")
+                turns = session_turns(db_path, sid)
+                agents = session_agents(db_path, sid)
+
+                # Aggregate assistant usage per model, then price each bucket.
+                per_model: dict = {}
+                for t in turns:
+                    if t["type"] != "assistant" or not t["model"]:
+                        continue
+                    u = per_model.setdefault(t["model"], {
+                        "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+                        "cache_create_5m_tokens": 0, "cache_create_1h_tokens": 0,
+                    })
+                    for k in u:
+                        u[k] += t[k] or 0
+
+                cost_usd = 0.0
+                cost_known = False
+                cost_estimated = False
+                for model, usage in per_model.items():
+                    c = cost_for(model, usage, pricing)
+                    if c["usd"] is not None:
+                        cost_usd += c["usd"]
+                        cost_known = True
+                        cost_estimated = cost_estimated or c["estimated"]
+
+                return _send_json(self, {
+                    "turns": turns,
+                    "agents": agents,
+                    "cost_usd": round(cost_usd, 4) if cost_known else None,
+                    "cost_estimated": cost_estimated,
+                })
             if path == "/api/hooks":
                 return _send_json(self, _read_hooks_data(db_path))
             if path == "/api/memory":

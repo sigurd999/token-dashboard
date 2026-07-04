@@ -8,6 +8,10 @@ The Skills route shows every skill Claude Code invoked, how many times, across h
 
 It's still a useful view — you can see which skills dominate your session time — just don't expect a complete per-skill token cost. PRs to broaden the catalog scan welcome.
 
+## Agent type names in the session view are paired best-effort
+
+The JSONL transcripts don't record which `Task`/`Agent` tool call spawned which sidechain `agent_id`. The session detail view pairs them heuristically: agents ordered by start time are matched to the earliest unused Task/Agent call that fired at or before that start. In sessions with many parallel agents launched in the same turn, two labels can swap. Compaction passes (`acompact-…`) and side questions (`aside_question-…`) are identified reliably from the agent-id prefix. Task/Agent calls without an explicit `subagent_type` fall back to the call's `description` as the label.
+
 ## Cost for Pro / Max / Max-20x users is shown as API-equivalent, not subscription value
 
 The Settings route lets you select your pricing plan, but the Overview cost number is always the API-equivalent (what the same usage would have cost on pay-per-token rates). If you're on Pro you pay a flat $20/month regardless of how much of that API-equivalent number you rack up. We don't do "subscription ROI" math yet — Anthropic doesn't publish per-plan rate limits as public JSON, and faking it would be worse than not doing it.

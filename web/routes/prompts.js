@@ -1,4 +1,4 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, getRange, sinceIso } from '/web/app.js';
 
 const SORTS = [
   { key: 'tokens', label: 'Most tokens' },
@@ -19,7 +19,11 @@ function writeSort(key) {
 
 export default async function (root) {
   const sort = readSort();
-  const rows = await api('/api/prompts?limit=100&sort=' + encodeURIComponent(sort.key));
+  const range = getRange();
+  const since = sinceIso(range);
+  const url = '/api/prompts?limit=100&sort=' + encodeURIComponent(sort.key)
+    + (since ? '&since=' + encodeURIComponent(since) : '');
+  const rows = await api(url);
 
   const sortTabs = `
     <div class="range-tabs" role="tablist">
@@ -33,6 +37,7 @@ export default async function (root) {
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
       <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Prompts</h2>
+      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} day${range.days > 1 ? 's' : ''}` : 'all time'}</span>
       <div class="spacer"></div>
       ${sortTabs}
     </div>

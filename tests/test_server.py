@@ -63,6 +63,23 @@ class ServerTests(unittest.TestCase):
         self.assertIn("plan", body)
         self.assertIn("pricing", body)
 
+    def test_session_detail_shape(self):
+        body = json.loads(self._get("/api/sessions/s"))
+        self.assertIsInstance(body, dict)
+        self.assertEqual(len(body["turns"]), 2)
+        self.assertEqual(body["agents"], [])
+        self.assertIn("cost_usd", body)
+        self.assertIn("cost_estimated", body)
+
+    def test_sessions_list_has_agent_fields(self):
+        body = json.loads(self._get("/api/sessions"))
+        self.assertEqual(len(body), 1)
+        row = body[0]
+        self.assertEqual(row["agents"], 0)
+        self.assertEqual(row["first_prompt"], "hi")
+        self.assertIn("billable_tokens", row)
+        self.assertIn("models", row)
+
     def test_head_returns_200_not_501(self):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/", method="HEAD")
         with urllib.request.urlopen(req) as resp:

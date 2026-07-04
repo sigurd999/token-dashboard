@@ -91,7 +91,7 @@ The dashboard is a single page with a hash-router tab bar across the top. Each t
 
 - **Overview** — all-time input/output/cache tokens, sessions, turns, estimated cost on your chosen plan, daily work and cache-read charts, tokens-by-project, token share by model, top tools by call count, and recent sessions. This is the landing tab.
 - **Prompts** — your most expensive user prompts ranked by tokens. Click any row to see the assistant response, tool calls made, and the size of each tool result.
-- **Sessions** — turn-by-turn view of any single session, with per-turn tokens and tool calls.
+- **Sessions** — session list with first-prompt preview, models used, agent count, and duration. The detail view shows cost/token/agent KPIs, a per-agent breakdown (subagents, compaction passes, side questions — with messages, tool calls, and tokens each), and a conversation flow grouped by prompt: tool-call chips, agent activity, per-exchange cost, and a token meter that makes the expensive exchanges obvious. The raw turn-by-turn table is one toggle away.
 - **Projects** — per-project comparison: tokens, session counts, and which files were touched most.
 - **Skills** — which skills you invoke most often, and (where we can measure them) their token cost. See [limitations](docs/KNOWN_LIMITATIONS.md#skills-token-counts-are-partial).
 - **Tips** — rule-based suggestions for reducing token usage (repeated file reads, oversized tool results, low cache-hit rate, etc.).

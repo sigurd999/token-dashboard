@@ -1,32 +1,8 @@
-import { api, fmt } from '/web/app.js';
+import { api, fmt, getRange, sinceIso } from '/web/app.js';
 import { barChart } from '/web/charts.js';
 
-const RANGES = [
-  { key: '7d',  label: '7d',  days: 7 },
-  { key: '30d', label: '30d', days: 30 },
-  { key: '90d', label: '90d', days: 90 },
-  { key: 'all', label: 'All', days: null },
-];
-
-function readRange() {
-  const q = (location.hash.split('?')[1] || '');
-  const m = /(?:^|&)range=([^&]+)/.exec(q);
-  const k = m && decodeURIComponent(m[1]);
-  return RANGES.find(r => r.key === k) || RANGES[1];
-}
-
-function writeRange(key) {
-  const base = (location.hash.replace(/^#/, '').split('?')[0]) || '/skills';
-  location.hash = '#' + base + '?range=' + encodeURIComponent(key);
-}
-
-function sinceIso(range) {
-  if (!range.days) return null;
-  return new Date(Date.now() - range.days * 86400 * 1000).toISOString();
-}
-
 export default async function (root) {
-  const range = readRange();
+  const range = getRange();
   const since = sinceIso(range);
   const url = '/api/skills' + (since ? '?since=' + encodeURIComponent(since) : '');
   const skills = await api(url);
@@ -34,17 +10,10 @@ export default async function (root) {
   const totalInvocations = skills.reduce((s, r) => s + r.invocations, 0);
   const totalSessions = new Set(); // not exact — we'd need another query; skip.
 
-  const rangeTabs = `
-    <div class="range-tabs" role="tablist">
-      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
-    </div>`;
-
   root.innerHTML = `
     <div class="flex" style="margin-bottom:14px">
       <h2 style="margin:0;font-size:16px;letter-spacing:-0.01em">Skills</h2>
-      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} days` : 'all time'}</span>
-      <div class="spacer"></div>
-      ${rangeTabs}
+      <span class="muted" style="font-size:12px">${range.days ? `last ${range.days} day${range.days > 1 ? 's' : ''}` : 'all time'}</span>
     </div>
 
     <div class="row cols-2">
@@ -81,10 +50,6 @@ export default async function (root) {
       </table>
     </div>
   `;
-
-  root.querySelectorAll('.range-tabs button').forEach(btn => {
-    btn.addEventListener('click', () => writeRange(btn.dataset.range));
-  });
 
   const top = skills.slice(0, 12);
   barChart(document.getElementById('ch-skills'), {

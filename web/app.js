@@ -36,6 +36,38 @@ export async function api(path, opts) {
 
 export const state = { plan: 'api', pricing: null };
 
+// ---------- global day-range filter (persists across tabs + reloads) ----------
+
+export const RANGES = [
+  { key: '1d',  label: '1d',  days: 1 },
+  { key: '7d',  label: '7d',  days: 7 },
+  { key: '30d', label: '30d', days: 30 },
+  { key: '90d', label: '90d', days: 90 },
+  { key: 'all', label: 'All', days: null },
+];
+
+const RANGE_STORAGE_KEY = 'td.range';
+
+export function getRange() {
+  const saved = localStorage.getItem(RANGE_STORAGE_KEY);
+  return RANGES.find(r => r.key === saved) || RANGES[2]; // default 30d
+}
+
+export function setRange(key) {
+  localStorage.setItem(RANGE_STORAGE_KEY, key);
+  render();
+}
+
+export function sinceIso(range) {
+  if (!range.days) return null;
+  return new Date(Date.now() - range.days * 86400 * 1000).toISOString();
+}
+
+export function withSince(url, since) {
+  if (!since) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'since=' + encodeURIComponent(since);
+}
+
 const ROUTES = {
   '/overview': () => import('/web/routes/overview.js'),
   '/prompts':  () => import('/web/routes/prompts.js'),
@@ -49,16 +81,27 @@ const ROUTES = {
 function buildTopbar() {
   const wrap = document.createElement('header');
   wrap.className = 'topbar';
+  const range = getRange();
   wrap.innerHTML = `
     <div class="brand">Token Dashboard</div>
     <nav>
       ${Object.keys(ROUTES).map(p => `<a href="#${p}" data-route="${p}">${p.slice(1)}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
+    <div class="range-tabs" id="global-range" role="tablist">
+      ${RANGES.map(r => `<button data-range="${r.key}" class="${r.key === range.key ? 'active' : ''}">${r.label}</button>`).join('')}
+    </div>
     <span class="pill" id="plan-pill">api</span>
     <span class="pill muted" title="Cmd/Ctrl+B blurs sensitive text">⌘B blur</span>
   `;
   document.body.prepend(wrap);
+
+  wrap.querySelectorAll('#global-range button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      wrap.querySelectorAll('#global-range button').forEach(b => b.classList.toggle('active', b === btn));
+      setRange(btn.dataset.range);
+    });
+  });
 }
 
 function setActiveTab(routeKey) {
