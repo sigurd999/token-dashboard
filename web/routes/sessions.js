@@ -384,11 +384,14 @@ async function renderSession(root, id) {
       ${sub ? `<div class="sub">${sub}</div>` : ''}
     </div>`;
 
+  const resumeCmd = `cd "${cwd || project}"; claude --resume ${id}`;
+
   root.innerHTML = `
     <div class="card">
-      <h2 style="display:flex;align-items:center">
-        <span>Session ${fmt.htmlSafe(id.slice(0, 8))}…</span>
+      <h2 style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        <span class="mono" style="font-size:15px">Session ${fmt.htmlSafe(id)}</span>
         <span class="spacer"></span>
+        <button id="resume-btn" title="${fmt.htmlSafe(resumeCmd)}">⎘ copy resume command</button>
         <a href="#/sessions" class="muted">← all sessions</a>
       </h2>
       <div class="flex muted" style="font-family:var(--mono);font-size:12px;flex-wrap:wrap;gap:14px">
@@ -463,6 +466,16 @@ async function renderSession(root, id) {
 
   // Assignment (not addEventListener) so re-renders don't stack handlers.
   root.onclick = e => {
+    const resumeBtn = e.target.closest('#resume-btn');
+    if (resumeBtn) {
+      navigator.clipboard.writeText(resumeCmd).then(() => {
+        const original = resumeBtn.textContent;
+        resumeBtn.textContent = 'copied!';
+        setTimeout(() => { resumeBtn.textContent = original; }, 1500);
+      });
+      return;
+    }
+
     const viewBtn = e.target.closest('button[data-view]');
     if (viewBtn) {
       if (viewBtn.dataset.view === 'raw') buildRawView();
