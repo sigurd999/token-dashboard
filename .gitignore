@@ -8,3 +8,7 @@ node_modules/
 .superpowers/
 .claude/
 docs/superpowers/
+
+# Memory system (local only, public repo)
+context/
+.memsearch/
